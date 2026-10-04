@@ -203,7 +203,7 @@ export default function App() {
         connection.send(packet);
       }
     });
-  };
+  }; 
 
   const broadcastUserList = (exceptPeerId?: string) => {
     if (!isHostRef.current) {
