@@ -8,6 +8,9 @@ type User = {
   username: string;
 };
 
+const GLOBAL_ROOM_CODE = "global";
+const USERNAME_STORAGE_KEY = "ram-chat-username-v1";
+
 type ChatMessage = {
   id: string;
   senderId: string;
@@ -82,7 +85,6 @@ async function compressImage(file: File): Promise<Blob> {
 
 export default function App() {
   const [usernameInput, setUsernameInput] = useState("");
-  const [roomInput, setRoomInput] = useState("");
   const [isJoined, setIsJoined] = useState(false);
   const [isHost, setIsHost] = useState(false);
   const [myUser, setMyUser] = useState<User | null>(null);
@@ -234,8 +236,8 @@ export default function App() {
       broadcastUserList();
       setStatus(
         connectedPeersRef.current.size > 0
-          ? `Hosting ${roomCodeRef.current}. ${connectedPeersRef.current.size} peer(s) connected.`
-          : `Hosting ${roomCodeRef.current}. Waiting for peers...`
+          ? `Global group chat • ${connectedPeersRef.current.size} peer(s) connected.`
+          : `Global group chat • Waiting for people to join...`
       );
     }
   };
@@ -263,7 +265,7 @@ export default function App() {
         broadcastUserList(sourcePeerId);
 
         setStatus(
-          `Hosting ${roomCodeRef.current}. ${connectedPeersRef.current.size} peer(s) connected.`
+          `Global group chat • ${connectedPeersRef.current.size} peer(s) connected.`
         );
       }
 
@@ -349,11 +351,11 @@ export default function App() {
 
       if (hostConnectionRef.current?.peer === connection.peer) {
         setNetworkReady(true);
-        setStatus(`Connected to room ${roomCodeRef.current}.`);
+        setStatus(`Connected to the global group chat.`);
       } else if (isHostRef.current) {
         setNetworkReady(true);
         setStatus(
-          `Hosting ${roomCodeRef.current}. ${connectedPeersRef.current.size} peer(s) connected.`
+          `Global group chat • ${connectedPeersRef.current.size} peer(s) connected.`
         );
       }
     });
@@ -404,27 +406,23 @@ export default function App() {
     });
   };
 
-  const handleJoin = async () => {
-    const username = usernameInput.trim();
-    const roomCode = roomInput.trim().toLowerCase();
+  const handleJoin = async (usernameValue = usernameInput) => {
+    const username = usernameValue.trim();
+    const roomCode = GLOBAL_ROOM_CODE;
 
     if (!username || username.length < 2) {
       setJoinError("Username must be at least 2 characters.");
       return;
     }
 
-    if (!roomCode || roomCode.length < 3) {
-      setJoinError("Room code must be at least 3 characters.");
-      return;
-    }
-
     setJoinError("");
-    setStatus("Connecting...");
+    setStatus("Connecting to the group chat...");
 
     const hostId = roomToHostId(roomCode);
+    let hostPeer: Peer | null = null;
 
     try {
-      const hostPeer = new Peer(hostId);
+      hostPeer = new Peer(hostId);
       const openedHostId = await waitForPeerOpen(hostPeer);
 
       peerRef.current = hostPeer;
@@ -440,15 +438,15 @@ export default function App() {
       setIsHost(true);
       setNetworkReady(true);
       setIsJoined(true);
-      setStatus(`Hosting room ${roomCode}. Share the room code to invite others.`);
+      localStorage.setItem(USERNAME_STORAGE_KEY, username);
+      setStatus("You are hosting the global group chat.");
     } catch (error) {
-      // The host-ID attempt failed. Destroy it before falling back to a guest peer.
-      hostPeer.destroy();
+      hostPeer?.destroy();
 
       const typedError = error as { type?: string; message?: string };
 
       if (typedError?.type !== "unavailable-id") {
-        setJoinError(typedError?.message || "Unable to create room host connection.");
+        setJoinError(typedError?.message || "Unable to connect to the group chat.");
         setStatus("Could not connect.");
         return;
       }
@@ -470,18 +468,42 @@ export default function App() {
         setIsHost(false);
         setNetworkReady(false);
         setIsJoined(true);
+        localStorage.setItem(USERNAME_STORAGE_KEY, username);
 
         const hostConnection = guestPeer.connect(hostId, { reliable: true });
         hostConnectionRef.current = hostConnection;
         registerConnection(hostConnection);
 
-        setStatus(`Joining room ${roomCode}...`);
+        setStatus("Joining the global group chat...");
       } catch (guestError) {
         const typedGuestError = guestError as { message?: string };
-        setJoinError(typedGuestError?.message || "Unable to join room.");
+        setJoinError(typedGuestError?.message || "Unable to join the group chat.");
         setStatus("Could not connect.");
       }
     }
+  };
+
+  const handleLeaveRoom = () => {
+    cleanupRecorder();
+    connectionsRef.current.forEach((connection) => connection.close());
+    connectionsRef.current.clear();
+    connectedPeersRef.current.clear();
+    hostConnectionRef.current = null;
+    peerRef.current?.destroy();
+    peerRef.current = null;
+    myUserRef.current = null;
+    roomCodeRef.current = "";
+    isHostRef.current = false;
+    seenMessageIdsRef.current.clear();
+    setMyUser(null);
+    setUsers({});
+    usersRef.current = {};
+    setMessages([]);
+    setDraft("");
+    setIsHost(false);
+    setNetworkReady(false);
+    setIsJoined(false);
+    setStatus("Enter your name to join the group chat.");
   };
 
   const handleSendText = () => {
@@ -626,6 +648,13 @@ export default function App() {
   };
 
   useEffect(() => {
+    const storedUsername = localStorage.getItem(USERNAME_STORAGE_KEY);
+    if (storedUsername) {
+      setUsernameInput(storedUsername.slice(0, 24));
+    }
+  }, []);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
@@ -662,11 +691,17 @@ export default function App() {
               transition={{ duration: 0.22, ease: "easeOut" }}
             >
               <p className="text-xs uppercase tracking-[0.24em] text-zinc-400">RAM Chat</p>
-              <h1 className="mt-3 text-3xl font-semibold tracking-tight">Live P2P Workspace</h1>
+              <h1 className="mt-3 text-3xl font-semibold tracking-tight">Live P2P Group Chat</h1>
               <p className="mt-2 text-sm leading-6 text-zinc-400">
-                Nothing is stored in the app. Refreshing or closing the tab clears the room state
-                and chat history.
+                One simple live group chat. Messages, images, and voice notes stay in RAM and disappear when the session ends.
               </p>
+
+              <div className="mt-6 border border-zinc-800 bg-zinc-950/70 px-3 py-3 text-sm text-zinc-400">
+                <div className="flex items-center justify-between">
+                  <span>Room</span>
+                  <span className="font-medium text-zinc-200">Global Group Chat</span>
+                </div>
+              </div>
 
               <div className="mt-6 space-y-3">
                 <label className="block text-sm text-zinc-300">
@@ -674,26 +709,14 @@ export default function App() {
                   <input
                     value={usernameInput}
                     onChange={(event) => setUsernameInput(event.target.value)}
-                    className="mt-1 w-full border border-zinc-700 bg-zinc-950 px-3 py-2 text-zinc-100 outline-none transition focus:border-indigo-400"
-                    placeholder="Your name"
-                    maxLength={24}
-                    autoComplete="off"
-                  />
-                </label>
-
-                <label className="block text-sm text-zinc-300">
-                  Room code
-                  <input
-                    value={roomInput}
-                    onChange={(event) => setRoomInput(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") {
-                        handleJoin();
+                        void handleJoin();
                       }
                     }}
                     className="mt-1 w-full border border-zinc-700 bg-zinc-950 px-3 py-2 text-zinc-100 outline-none transition focus:border-indigo-400"
-                    placeholder="team-sync"
-                    maxLength={32}
+                    placeholder="Your name"
+                    maxLength={24}
                     autoComplete="off"
                   />
                 </label>
@@ -702,10 +725,10 @@ export default function App() {
               {joinError && <p className="mt-3 text-sm text-rose-300">{joinError}</p>}
 
               <button
-                onClick={handleJoin}
+                onClick={() => void handleJoin()}
                 className="mt-6 w-full border border-indigo-500 bg-indigo-500/10 px-4 py-2 text-sm font-semibold text-indigo-200 transition hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Join Room
+                {status === "Connecting to the group chat..." ? "Connecting..." : "Join Group Chat"}
               </button>
             </motion.div>
           </motion.div>
@@ -717,7 +740,7 @@ export default function App() {
           <div>
             <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">RAM Chat</p>
             <h2 className="mt-1 text-lg font-semibold text-zinc-100">
-              {roomCodeRef.current || "No Room"}
+              {isJoined ? "Global Group Chat" : "RAM Chat"}
             </h2>
           </div>
 
@@ -731,6 +754,15 @@ export default function App() {
               <p>{isHost ? "Host" : "Peer"}</p>
             </div>
             <p className="max-w-[28rem] text-xs text-zinc-500">{networkReady ? status : "Not connected"}</p>
+            {isJoined && (
+              <button
+                type="button"
+                onClick={handleLeaveRoom}
+                className="mt-2 border border-zinc-700 px-2 py-1 text-xs text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200"
+              >
+                Leave Room
+              </button>
+            )}
           </div>
         </header>
 
@@ -738,7 +770,7 @@ export default function App() {
           <aside className="max-h-44 overflow-y-auto border-b border-zinc-800 px-4 py-4 md:max-h-none md:w-72 md:border-b-0 md:border-r md:px-5">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-medium uppercase tracking-[0.2em] text-zinc-400">
-                Active Users
+                Group Members
               </h3>
               <span className="text-xs text-zinc-600">{sortedUsers.length}</span>
             </div>
